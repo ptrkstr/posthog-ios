@@ -21,11 +21,45 @@ enum PostHogStackTraceProcessor {
     ///
     /// Automatically strips PostHog SDK frames from the top of the stack trace
     /// so the trace starts at user code.
+    ///
+    /// - Parameters:
+    ///   - config: Error tracking configuration
+    ///   - entryCallStack: Return addresses captured directly in the public SDK entry point
+    ///     (e.g. `captureException`). If set, all frames above the caller of that entry point are
+    ///     stripped, also when the SDK is statically linked into the app binary.
     static func captureCurrentStackTraceWithMetadata(
-        config: PostHogErrorTrackingConfig
+        config: PostHogErrorTrackingConfig,
+        entryCallStack: [NSNumber]? = nil
     ) -> [PostHogStackFrame] {
-        let addresses = Thread.callStackReturnAddresses
+        var addresses = Thread.callStackReturnAddresses
+        if let entryCallStack = entryCallStack,
+           let callerIndex = callerFrameIndex(in: addresses, entryCallStack: entryCallStack)
+        {
+            addresses = Array(addresses[callerIndex...])
+        }
         return symbolicateAddresses(addresses, config: config, stripTopPostHogFrames: true)
+    }
+
+    /// Finds the index of the first caller frame in `stack`
+    ///
+    /// `entryCallStack` is captured in the public SDK entry point, and `stack` is captured deeper in the SDK
+    /// on the same thread. The two stacks have different return addresses into the entry point, so the
+    /// frames they share at the bottom are the caller's frames. This does not need module or symbol names,
+    /// so it also works when the SDK is statically linked into a stripped app binary.
+    ///
+    /// - Returns: The index in `stack` where the caller's frames start, or nil if the stacks share no frames
+    static func callerFrameIndex(in stack: [NSNumber], entryCallStack: [NSNumber]) -> Int? {
+        let stackAddresses = stack.map(\.uintValue)
+        let entryAddresses = entryCallStack.map(\.uintValue)
+
+        for index in stackAddresses.indices {
+            guard let entryIndex = entryAddresses.firstIndex(of: stackAddresses[index]) else { continue }
+            // Compare only up to the end of the shorter stack, in case a stack was truncated
+            if zip(stackAddresses[index...], entryAddresses[entryIndex...]).allSatisfy({ $0 == $1 }) {
+                return index
+            }
+        }
+        return nil
     }
 
     /// Symbolicate an array of return addresses using dladdr()

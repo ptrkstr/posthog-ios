@@ -129,6 +129,85 @@ struct PostHogStackTraceProcessorTest {
         }
     }
 
+    // MARK: - Entry Point Stripping Tests
+
+    @Suite("Entry Point Stripping")
+    struct EntryPointStrippingTests {
+        @Test("finds the first caller frame after the SDK frames")
+        func findsFirstCallerFrame() {
+            // 1, 2: stack capture frames, 10 and 13: different return addresses into the entry point, 20, 30: caller frames
+            let entryCallStack: [NSNumber] = [1, 2, 10, 20, 30]
+            let stack: [NSNumber] = [1, 2, 11, 12, 13, 20, 30]
+
+            #expect(PostHogStackTraceProcessor.callerFrameIndex(in: stack, entryCallStack: entryCallStack) == 5)
+        }
+
+        @Test("finds the first caller frame when a stack is truncated")
+        func findsFirstCallerFrameWhenTruncated() {
+            let entryCallStack: [NSNumber] = [1, 2, 10, 20, 30, 40]
+            let stack: [NSNumber] = [1, 2, 11, 12, 13, 20, 30]
+
+            #expect(PostHogStackTraceProcessor.callerFrameIndex(in: stack, entryCallStack: entryCallStack) == 5)
+        }
+
+        @Test("finds the first caller frame when the caller is recursive")
+        func findsFirstCallerFrameWhenRecursive() {
+            let entryCallStack: [NSNumber] = [1, 10, 20, 20, 20, 30]
+            let stack: [NSNumber] = [1, 11, 12, 20, 20, 20, 30]
+
+            #expect(PostHogStackTraceProcessor.callerFrameIndex(in: stack, entryCallStack: entryCallStack) == 3)
+        }
+
+        @Test("returns nil when the stacks share no caller frames")
+        func returnsNilWithoutSharedFrames() {
+            let entryCallStack: [NSNumber] = [1, 10, 20]
+            let stack: [NSNumber] = [1, 11, 21]
+
+            #expect(PostHogStackTraceProcessor.callerFrameIndex(in: stack, entryCallStack: entryCallStack) == nil)
+        }
+
+        @Test("strips all frames above the caller of the entry point")
+        func stripsFramesAboveCaller() {
+            let config = PostHogErrorTrackingConfig()
+            // This test function is the entry point. The SDK is statically linked into the test binary,
+            // so the module name check alone does not strip the SDK frames.
+            let entryCallStack = Thread.callStackReturnAddresses
+            let frames = PostHogStackTraceProcessor.captureCurrentStackTraceWithMetadata(
+                config: config,
+                entryCallStack: entryCallStack
+            )
+            let entryAddresses = entryCallStack.map { UInt64($0.uintValue).pacStripped }
+
+            #expect(!frames.isEmpty)
+            #expect(frames.count < entryAddresses.count)
+            #expect(frames.map(\.instructionAddress) == Array(entryAddresses.suffix(frames.count)))
+        }
+
+        @Test("captureException stack starts at the caller")
+        func captureExceptionStackStartsAtCaller() throws {
+            let config = PostHogErrorTrackingConfig()
+            let entryCallStack = Thread.callStackReturnAddresses
+            let properties = PostHogExceptionProcessor.errorToProperties(
+                NSError(domain: "TestDomain", code: 1),
+                handled: true,
+                config: config,
+                entryCallStack: entryCallStack
+            )
+
+            let exceptionList = try #require(properties["$exception_list"] as? [[String: Any]])
+            let stacktrace = try #require(exceptionList.first?["stacktrace"] as? [String: Any])
+            let frames = try #require(stacktrace["frames"] as? [[String: Any]])
+            let frameAddresses = frames.compactMap { $0["instruction_addr"] as? String }
+            let entryAddresses = Set(entryCallStack.map {
+                String(format: PostHogStackFrame.hexAddressFormat, UInt64($0.uintValue).pacStripped)
+            })
+
+            // The SDK frames are not in the entry call stack, so only the caller frames are left
+            #expect(!frameAddresses.isEmpty)
+            #expect(frameAddresses.allSatisfy { entryAddresses.contains($0) })
+        }
+    }
+
     // MARK: - Symbolicate Addresses Tests
 
     @Suite("Symbolicate Addresses")
