@@ -1940,18 +1940,7 @@ let maxRetryDelay = 30.0
         _ error: Error,
         properties: [String: Any]? = nil
     ) {
-        guard isEnabled() else { return }
-
-        let errorProperties = PostHogExceptionProcessor.errorToProperties(
-            error,
-            handled: true,
-            config: config.errorTrackingConfig
-        )
-
-        var mergedProperties = errorProperties
-        properties?.forEach { mergedProperties[$0.key] = $0.value }
-
-        capture("$exception", properties: mergedProperties)
+        captureError(error, properties: properties, entryCallStack: Thread.callStackReturnAddresses)
     }
 
     /// Capture a Swift Error or NSError without additional properties
@@ -1964,7 +1953,28 @@ let maxRetryDelay = 30.0
     public func captureException(
         _ error: Error
     ) {
-        captureException(error, properties: nil)
+        captureError(error, properties: nil, entryCallStack: Thread.callStackReturnAddresses)
+    }
+
+    // Each public entry point captures `entryCallStack` in its own body, so the SDK can strip its own frames above the caller
+    private func captureError(
+        _ error: Error,
+        properties: [String: Any]?,
+        entryCallStack: [NSNumber]
+    ) {
+        guard isEnabled() else { return }
+
+        let errorProperties = PostHogExceptionProcessor.errorToProperties(
+            error,
+            handled: true,
+            config: config.errorTrackingConfig,
+            entryCallStack: entryCallStack
+        )
+
+        var mergedProperties = errorProperties
+        properties?.forEach { mergedProperties[$0.key] = $0.value }
+
+        capture("$exception", properties: mergedProperties)
     }
 
     /// Capture an NSException
@@ -1990,18 +2000,7 @@ let maxRetryDelay = 30.0
         _ exception: NSException,
         properties: [String: Any]? = nil
     ) {
-        guard isEnabled() else { return }
-
-        let exceptionProperties = PostHogExceptionProcessor.exceptionToProperties(
-            exception,
-            handled: true,
-            config: config.errorTrackingConfig
-        )
-
-        var mergedProperties = exceptionProperties
-        properties?.forEach { mergedProperties[$0.key] = $0.value }
-
-        capture("$exception", properties: mergedProperties)
+        captureNSException(exception, properties: properties, entryCallStack: Thread.callStackReturnAddresses)
     }
 
     /// Capture an NSException without additional properties
@@ -2014,7 +2013,27 @@ let maxRetryDelay = 30.0
     public func captureException(
         _ exception: NSException
     ) {
-        captureException(exception, properties: nil)
+        captureNSException(exception, properties: nil, entryCallStack: Thread.callStackReturnAddresses)
+    }
+
+    private func captureNSException(
+        _ exception: NSException,
+        properties: [String: Any]?,
+        entryCallStack: [NSNumber]
+    ) {
+        guard isEnabled() else { return }
+
+        let exceptionProperties = PostHogExceptionProcessor.exceptionToProperties(
+            exception,
+            handled: true,
+            config: config.errorTrackingConfig,
+            entryCallStack: entryCallStack
+        )
+
+        var mergedProperties = exceptionProperties
+        properties?.forEach { mergedProperties[$0.key] = $0.value }
+
+        capture("$exception", properties: mergedProperties)
     }
 
     private func installIntegrations() {
